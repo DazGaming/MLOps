@@ -1,0 +1,78 @@
+// Jenkinsfile — "Build Pipeline that integrates Steps" (Automated Workflow)
+//
+// Two Jenkins jobs come from this repo:
+//   1. "loan-approval-full-pipeline"  -> runs this Jenkinsfile top to bottom
+//      (Ingest -> Prepare -> Feature Store -> Bias Check -> Train -> Register)
+//   2. "loan-approval-retrain"        -> a second, simpler Pipeline job that
+//      just runs retrain_trigger.py on a schedule/trigger (see README)
+//
+// Setup in Jenkins:
+//   New Item -> Pipeline -> Pipeline script from SCM (or paste this directly
+//   into "Pipeline script" for the fastest demo setup, no SCM needed).
+//
+// Windows note: Jenkins runs this via `bat`, which uses your Windows venv
+// Python directly — no WSL/Docker required.
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        // Adjust this to the absolute path of your project on the Windows box
+        PROJECT_DIR = "C:\\ml-mlops-demo"
+        VENV_PYTHON = "${PROJECT_DIR}\\venv\\Scripts\\python.exe"
+    }
+
+    stages {
+        stage('Ingest Data') {
+            steps {
+                bat "\"%VENV_PYTHON%\" \"%PROJECT_DIR%\\src\\ingest.py\""
+            }
+        }
+        stage('Prepare & Process Data') {
+            steps {
+                bat "\"%VENV_PYTHON%\" \"%PROJECT_DIR%\\src\\prepare_features.py\""
+            }
+        }
+        stage('Store Data in Feature Store') {
+            steps {
+                bat "\"%VENV_PYTHON%\" \"%PROJECT_DIR%\\src\\feature_store\\materialize.py\""
+            }
+        }
+        stage('Train & Tune Models') {
+            steps {
+                bat "\"%VENV_PYTHON%\" \"%PROJECT_DIR%\\src\\train.py\""
+            }
+        }
+        stage('Detect and Mitigate Bias') {
+            steps {
+                bat "\"%VENV_PYTHON%\" \"%PROJECT_DIR%\\src\\bias_check.py\""
+            }
+        }
+        stage('Deploy / Hot-swap Model') {
+            steps {
+                // deploy_api.py must already be running (see README);
+                // this just tells it to pick up the new champion version
+                bat "curl -X POST http://127.0.0.1:8001/reload_model"
+            }
+        }
+        stage('Monitor for Drift') {
+            steps {
+                bat "\"%VENV_PYTHON%\" \"%PROJECT_DIR%\\src\\monitor.py\""
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed: new model trained, bias-audited, registered, and deployed.'
+        }
+        failure {
+            echo 'Pipeline failed — check stage logs above. In production this would page on-call / block deploy.'
+        }
+    }
+}
